@@ -9,6 +9,7 @@
 #include <hfs_format.h>
 
 #define VOL_HEADER_START 1024
+#define NODE_DESCR_SIZE  14
 
 void readHDD(int descr, unsigned char* secteur, uint startpos, int size);
 
@@ -53,6 +54,99 @@ int getBlockSize(struct HFSPlusVolumeHeader *hfs)
 	return little2big(hfs->blockSize);
 }
 
+void fillBTHeaderRec(struct BTHeaderRec *hRec, unsigned char* sect, int print)
+{
+	memcpy(hRec, sect, sizeof(struct BTHeaderRec));
+	hRec->treeDepth = htons(hRec->treeDepth);
+	hRec->rootNode = htonl(hRec->rootNode);
+	hRec->leafRecords = htonl(hRec->leafRecords);
+	hRec->firstLeafNode = htonl(hRec->firstLeafNode);
+	hRec->lastLeafNode = htonl(hRec->lastLeafNode);
+	hRec->nodeSize = htons(hRec->nodeSize);
+	hRec->maxKeyLength = htons(hRec->maxKeyLength);
+	hRec->totalNodes = htonl(hRec->totalNodes);
+	hRec->freeNodes = htonl(hRec->freeNodes);
+	hRec->reserved1 = htons(hRec->reserved1);
+	hRec->clumpSize = htonl(hRec->clumpSize);
+	hRec->attributes = htonl(hRec->attributes);
+	
+	if(print > 0)
+	{
+		printf("----- BT HEADER RECORD -----\n");
+		printf("tree depth = %d\n", hRec->treeDepth);
+		printf("rootNode = %d\n", hRec->rootNode);
+		printf("leafRecords = %d\n", hRec->leafRecords);
+		printf("firstLeafNode = %d\n", hRec->firstLeafNode);
+		printf("lastLeafNode = %d\n", hRec->lastLeafNode);
+		printf("nodeSize = %d\n", hRec->nodeSize);
+		printf("maxKeyLength = %d\n", hRec->maxKeyLength);
+		printf("totalNodes = %d\n", hRec->totalNodes);
+		printf("freeNodes = %d\n", hRec->freeNodes);
+		printf("clumpSize = %d\n", hRec->clumpSize);
+		printf("attributes = %d\n", hRec->attributes);
+	}
+}
+
+void fillNodeDescriptor(struct BTNodeDescriptor *desc, unsigned char* sect, int print)
+{
+	memcpy(desc, sect, sizeof(struct BTNodeDescriptor));
+
+	desc->fLink = htonl(desc->fLink);
+	desc->bLink = htonl(desc->bLink);
+	desc->numRecords = htons(desc->numRecords);
+	desc->reserved = htons(desc->reserved);
+
+	if(print > 0)
+	{
+		printf("flink=%u\n", desc->fLink);
+	    printf("blink=%u\n", desc->bLink);
+	    printf("kind=%d\n", desc->kind);
+	    printf("height=%u\n", desc->height);
+	    printf("numRecords=%u\n", desc->numRecords);
+
+	}
+}
+
+void fillCatFolderRec(struct HFSPlusCatalogFolder *recPtr, unsigned char* sect, int print)
+{
+	memcpy(recPtr, sect, sizeof(struct HFSPlusCatalogFolder));
+	recPtr->recordType = htons(recPtr->recordType);
+	recPtr->flags = htons(recPtr->flags);
+	recPtr->valence = htonl(recPtr->valence);
+	recPtr->folderID = htonl(recPtr->folderID);
+	recPtr->createDate = htonl(recPtr->createDate);
+	recPtr->contentModDate = htonl(recPtr->contentModDate);
+	recPtr->attributeModDate = htons(recPtr->attributeModDate);
+	recPtr->accessDate = htonl(recPtr->accessDate);
+	recPtr->backupDate = htonl(recPtr->backupDate);
+	recPtr->textEncoding = htonl(recPtr->textEncoding);
+	//recPtr->reserved = htonl(recPtr->reserved);
+
+	if(print > 0)
+	{
+		printf("recordType= %d\n", recPtr->recordType);
+		printf("flags= %u\n", recPtr->flags);
+		printf("nb file/folder = %u\n", recPtr->valence);
+		printf("createDate= %u\n", recPtr->createDate);
+		printf("contentModDate= %u\n", recPtr->contentModDate);
+		printf("accessDate= %u\n", recPtr->accessDate);
+	}
+}
+
+uint getNodeOffsetInCat(uint node, uint size, uint startBTree)
+{
+	return node * size + startBTree;
+}
+
+int getFolderRecStartPos(short int keyLen)
+{
+	int ret = NODE_DESCR_SIZE + sizeof(keyLen) + htons(keyLen);
+	if( ret % 2 != 0 ) ret++ ;
+
+	return ret;
+}
+
+
 
 int main(int argc, char const *argv[])
 {
@@ -65,6 +159,7 @@ int main(int argc, char const *argv[])
 		printf("Errorno open: %d  %s\n", errno, strerror(errno));
 		return hdd;
 	}
+
 	printf("------------- Volume Header ----------------\n");
 	readHDD(hdd, secteur, VOL_HEADER_START, 512);
 
@@ -85,28 +180,40 @@ int main(int argc, char const *argv[])
     readHDD(hdd, secteur, startBTree, 512);
 
     struct BTNodeDescriptor btnDesc;
-    memcpy(&btnDesc, secteur, sizeof(struct BTNodeDescriptor));
-   
-    printf("flink=%u\n", htonl(btnDesc.fLink));
-    printf("blink=%u\n", htonl(btnDesc.bLink));
-    printf("kind=%u\n", btnDesc.kind);
-    printf("height=%u\n", btnDesc.height);
-    printf("numRecords=%u\n", htons(btnDesc.numRecords));
+    fillNodeDescriptor(&btnDesc, secteur, 1);
 
     struct BTHeaderRec bthRec ;
-    memcpy(&bthRec, &secteur[14], sizeof(struct BTHeaderRec));
+    fillBTHeaderRec(&bthRec, &secteur[NODE_DESCR_SIZE], 1);
 
-    printf("rootnode= %u\n", htonl(bthRec.rootNode));
-    printf("firstleafnode= %u\n", htonl(bthRec.firstLeafNode));
-    printf("attributes= %u\n", htonl(bthRec.attributes));
+	printf("\n------------- FirstLeafNode ----------------\n");
 
-    uint startFirstLeafNode = htonl(bthRec.firstLeafNode) * hfs.blockSize;
-
-    printf("startFirstLeafNode= %u, %u\n", startFirstLeafNode, hfs.blockSize);
-    printf("------------- FirstLeafNode ----------------\n");
+    uint startFirstLeafNode = getNodeOffsetInCat(bthRec.firstLeafNode, bthRec.nodeSize, startBTree);
+    printf("startFirstLeafNode= %u\n", startFirstLeafNode);
     readHDD(hdd, secteur, startFirstLeafNode, 512);
 
+    struct BTNodeDescriptor btnDescrFln;
+    fillNodeDescriptor(&btnDescrFln, secteur, 1);
 
+    struct HFSPlusCatalogKey catKeyFln;
+    memcpy(&catKeyFln, &secteur[NODE_DESCR_SIZE], sizeof(struct HFSPlusCatalogKey));
+
+    printf("keyLength:%u\n", htons(catKeyFln.keyLength));
+    printf("parentID:%u\n", htonl(catKeyFln.parentID));
+    printf("nodename length :%u\n", htons(catKeyFln.nodeName.length));
+    //printf("nodename unicode :%s\n", catKeyFln.nodeName.unicode);
+
+   	printf("-------------------------\n");
+
+    struct HFSPlusCatalogFolder fold;
+    fillCatFolderRec(&fold, &secteur[getFolderRecStartPos(catKeyFln.keyLength)], 1);
+    
+    printf("\n------------- LastLeafNode ----------------\n");
+    uint startLastLeafNode = getNodeOffsetInCat( bthRec.lastLeafNode, bthRec.nodeSize, startBTree);
+    printf("startLastLeafNode= %u\n", startLastLeafNode);
+    readHDD(hdd, secteur, startLastLeafNode, 512);
+
+    struct BTNodeDescriptor btnDescrLln;
+    fillNodeDescriptor(&btnDescrLln, secteur, 1);
 
     close(hdd);
 
