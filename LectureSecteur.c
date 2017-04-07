@@ -6,12 +6,86 @@
 #include <sys/disk.h>
 #include <errno.h>
 #include <string.h>
+#include <stdlib.h>
 #include <hfs_format.h>
 
 #define VOL_HEADER_START 1024
 #define NODE_DESCR_SIZE  14
 
-void readHDD(int descr, unsigned char* secteur, uint startpos, int size);
+struct BTreePointerRecord {
+	u_int16_t keyLength;
+	u_int32_t parentId;
+	u_int16_t length;
+  unsigned char *key;
+  u_int32_t pointer;
+};
+
+//refaire ca en mieux!!!
+void printUTFasChar(uint length, unsigned char* key)
+{
+	printf("Key: ");
+	for (int i = 0; i < length; i++)
+	{
+		// if (i % 2 == 1)
+			printf("%c", key[i]);
+	}
+	printf("\n");
+}
+
+u_int16_t readUShort(int seek, unsigned char* block)
+{
+	return htons((block[seek + 1] << 8) + block[seek]);
+}
+
+u_int32_t readULong(int seek, unsigned char* block)
+{
+	return htonl((block[seek + 3] << 24) + (block[seek + 2] << 16) + (block[seek + 1] << 8) + block[seek]);
+}
+
+struct BTreePointerRecord* getPointerRecs(int nbRec, uint* offsets, unsigned char* nodeBlock)
+{
+	struct BTreePointerRecord *pointRecs = malloc(sizeof(struct BTreePointerRecord) * nbRec);
+	for (int i = 0; i < nbRec; i++)
+	{
+		pointRecs[i].keyLength = readUShort(offsets[i], nodeBlock);
+		printf("Pointer record %d has key length %u.\n", i + 1, pointRecs[i].keyLength);
+		int seek = offsets[i] + 2; // tete de lecture
+		pointRecs[i].parentId = readULong(seek, nodeBlock);
+		printf("ParentId: %u\n", pointRecs[i].parentId);
+		seek += 4;
+		pointRecs[i].length = readUShort(seek, nodeBlock) * 2;
+		seek += 2;
+		printf("Pointer record %d has node name length %u.\n", i+1, pointRecs[i].length);
+		unsigned char *key = malloc(sizeof(unsigned char) * pointRecs[i].length);
+		for (int j = 0; j < pointRecs[i].length; j++)
+		{
+			key[j] = nodeBlock[seek + j];
+			// printf("Character %d is '%c'", j, key[j]);
+		}
+		printUTFasChar(pointRecs[i].length, key);
+		pointRecs[i].key = key;
+		seek += pointRecs[i].length;
+		pointRecs[i].pointer = readULong(seek, nodeBlock);
+		printf("Pointer record %d points to %u.\n", i + 1, pointRecs[i].pointer);
+	}
+	return pointRecs;
+}
+
+uint* parseRecordOffsets(int nbRec, unsigned char* secteur, int nodeSize)
+{
+	int nbOffsets = nbRec + 1;
+	uint *recOffsets = malloc(sizeof(uint) * nbOffsets);
+	printf("This node record offsets: ");
+	for (int i = 0, j = nodeSize-1; i < nbOffsets; i++, j -= 2)
+	{
+		recOffsets[i] = (secteur[j-1] << 8) + secteur[j];
+		if (i < nbRec-1)
+			printf("%u, ", recOffsets[i]);
+		else
+			printf("%u\n", recOffsets[i]);
+	}
+	return recOffsets;
+}
 
 uint little2big(uint n)
 {
@@ -32,7 +106,7 @@ void readHDD(int descr, unsigned char* secteur, uint startpos, int size)
 {
 	lseek( descr, startpos, SEEK_SET );
 	read(descr, secteur, size);
-	affichageSecteur(secteur, size);
+	// affichageSecteur(secteur, size);
 }
 
 void printHFSFileInfo(struct HFSPlusForkData file)
@@ -150,7 +224,7 @@ int getFolderRecStartPos(short int keyLen)
 
 int main(int argc, char const *argv[])
 {
-	unsigned char secteur[8192];
+	unsigned char secteur[1024];
 	int hdd=0, blockSize=0;
 
 	hdd = open("/dev/rdisk0s2",O_RDONLY);
@@ -185,6 +259,21 @@ int main(int argc, char const *argv[])
     struct BTHeaderRec bthRec ;
     fillBTHeaderRec(&bthRec, &secteur[NODE_DESCR_SIZE], 1);
 
+  printf("\n------------- RootNode -------------------\n");
+  	uint startRootNode = getNodeOffsetInCat(bthRec.rootNode, bthRec.nodeSize, startBTree);
+  	printf("Real root node offset = %u\n", startRootNode);
+
+  	unsigned char catBlock[bthRec.nodeSize];
+
+  	readHDD(hdd, catBlock, startRootNode, bthRec.nodeSize);
+
+  	struct BTNodeDescriptor rootNode;
+  	fillNodeDescriptor(&rootNode, catBlock, 1);
+
+  	uint *recOffsets = parseRecordOffsets(rootNode.numRecords, catBlock, bthRec.nodeSize);
+
+  	struct BTreePointerRecord *records = getPointerRecs(rootNode.numRecords, recOffsets, catBlock);
+
 	printf("\n------------- FirstLeafNode ----------------\n");
 
     uint startFirstLeafNode = getNodeOffsetInCat(bthRec.firstLeafNode, bthRec.nodeSize, startBTree);
@@ -200,7 +289,7 @@ int main(int argc, char const *argv[])
     printf("keyLength:%u\n", htons(catKeyFln.keyLength));
     printf("parentID:%u\n", htonl(catKeyFln.parentID));
     printf("nodename length :%u\n", htons(catKeyFln.nodeName.length));
-    //printf("nodename unicode :%s\n", catKeyFln.nodeName.unicode);
+    // printf("nodename unicode :%s\n", catKeyFln.nodeName.unicode);
 
    	printf("-------------------------\n");
 
@@ -215,8 +304,12 @@ int main(int argc, char const *argv[])
     struct BTNodeDescriptor btnDescrLln;
     fillNodeDescriptor(&btnDescrLln, secteur, 1);
 
-    uint startRootNode = getNodeOffsetInCat(bthRec.rootNode, bthRec.nodeSize, startBTree);
- 	printf("Real root node offset = %u\n", startRootNode);
+
+    memcpy(&catKeyFln, &secteur[NODE_DESCR_SIZE], sizeof(struct HFSPlusCatalogKey));
+
+    printf("keyLength:%u\n", htons(catKeyFln.keyLength));
+    printf("parentID:%u\n", htonl(catKeyFln.parentID));
+    printf("nodename length :%u\n", htons(catKeyFln.nodeName.length));
 
     close(hdd);
 
