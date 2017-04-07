@@ -150,7 +150,7 @@ int getFolderRecStartPos(short int keyLen)
 
 int main(int argc, char const *argv[])
 {
-	unsigned char secteur[1024];
+	unsigned char secteur[8192];
 	int hdd=0, blockSize=0;
 
 	hdd = open("/dev/rdisk0s2",O_RDONLY);
@@ -214,6 +214,9 @@ int main(int argc, char const *argv[])
 
     struct BTNodeDescriptor btnDescrLln;
     fillNodeDescriptor(&btnDescrLln, secteur, 1);
+
+    uint startRootNode = getNodeOffsetInCat(bthRec.rootNode, bthRec.nodeSize, startBTree);
+ 	printf("Real root node offset = %u\n", startRootNode);
 
     close(hdd);
 
