@@ -11,6 +11,8 @@
 
 #define VOL_HEADER_START 1024
 #define NODE_DESCR_SIZE  14
+#define LEAF_NODE -1
+#define INDEX_NODE 0
 
 typedef u_int32_t HFSCatalogNodeID;
 
@@ -30,7 +32,7 @@ void printUTFasChar(uint length, unsigned char* key)
 	printf("Key: ");
 	for (int i = 0; i < length; i++)
 	{
-		// if (i % 2 == 1)
+		if (i % 2 == 1)
 			printf("%c", key[i]);
 	}
 	printf("\n");
@@ -154,47 +156,138 @@ void readHeaderRecord(struct BTHeaderRec *hRec, uint offset)
 	hRec->attributes = htonl(hRec->attributes);
 }
 
-void readLeafNode()
+void readKeyCatalog(struct BTreePointerRecord* pRec, int* seek, unsigned char* sect)
 {
-	printf("readLeafNode\n");
-	return;
+	pRec->keyLength = readUShort(*seek, sect);
+	*seek += sizeof(pRec->keyLength);
+
+	pRec->parentId = readULong(*seek, sect);
+	//printf("parentId: %u\n", pRec->parentId);
+
+	*seek += sizeof(pRec->parentId);
+	pRec->length = 2 * readUShort(*seek, sect); // on multiplie par 2 car length est en unicode16
+	//printf("length: %u\n", pRec->length);
+
+	*seek += sizeof(pRec->length);
+	pRec->key = malloc(pRec->length);
+
+	memcpy(pRec->key, &sect[*seek], pRec->length);
+	//printUTFasChar(pRec->length, pRec->key);
+	*seek += pRec->length;
 }
 
-void readIndexRecord(unsigned char* sect, uint offset, HFSCatalogNodeID cnid, uint* pointer)
+uint readDataRecord(unsigned char* sect, uint offset, HFSCatalogNodeID cnid)
 {
-	printf("reading index record\n");
-	printf("offset: %u\n", offset);
-	printf("sect: %s\n", sect);
+	int seek = offset;
+	struct BTreePointerRecord pointRec;
+
+	readKeyCatalog(&pointRec, &seek, sect);
+
+	printUTFasChar(pointRec.length, pointRec.key );
+
+	u_int16_t type = readUShort(seek, sect);
+	seek += sizeof(u_int16_t);
+
+	struct HFSPlusCatalogFolder foldInfo;
+	struct HFSPlusCatalogFile fileInfo;
+	struct HFSPlusCatalogThread threadInfo;
+
+	switch(type)
+	{
+		case kHFSPlusFolderRecord : 	
+			memcpy(&foldInfo, &sect[seek], sizeof(struct HFSPlusCatalogFolder));
+			break;
+		case 2 : 	
+			memcpy(&fileInfo, &sect[seek], sizeof(struct HFSPlusCatalogFile));
+			break;
+		default : 	
+			memcpy(&threadInfo, &sect[seek], sizeof(struct HFSPlusCatalogThread));
+			break;
+	}
+	return 0;
+
+}
+
+void readLeafNode(unsigned char* secteur, uint numRecords, uint* recOffsets, HFSCatalogNodeID cnid )
+{
+	for(int i = 0; i < numRecords; i++)
+	{
+		readDataRecord(secteur, recOffsets[i], cnid);
+		
+	}
+}
+
+
+
+
+uint readIndexRecord(unsigned char* sect, uint offset, uint* nodeNum)
+{
+	int seek = offset;
 
 	struct BTreePointerRecord pointRec;
-	memcpy(&pointRec, sect + offset, sizeof(struct BTreePointerRecord));
-	*pointer = htonl(pointRec.pointer);
-	printf("parentId:%u\n", htonl(pointRec.parentId));
-	printf("pointer = %08.8X\n", *pointer);
 
+	readKeyCatalog(&pointRec, &seek, sect);
 
+	pointRec.pointer = readULong(seek, sect);
+	//printf("pointRec.pointer: %u\n", pointRec.pointer);
+	*nodeNum = pointRec.pointer;
+
+	//printf("parentId: %u\n",  pointRec.parentId);
+	return pointRec.parentId;
 
 }
 
-void readIndexNode(HFSCatalogNodeID cnid, uint *node, u_int16_t nodesize, uint offset, u_int8_t *height)
+void readIndexNode(unsigned char* secteur, uint numRecords, uint* recOffsets, uint* node, HFSCatalogNodeID cnid )
 {
+	//printf("numRecords:%u, recOffsets[2]=%u\n", desc.numRecords, recOffsets[2]);
+	// on alloue la memoire pour nos records du node
+	uint nodeNum = 0;
+	uint parentId = 0;
+
+	for(int i = 0; i < numRecords; i++)
+	{
+		parentId = readIndexRecord(secteur, recOffsets[i], &nodeNum);
+		if(parentId <= cnid)
+		{
+			*node = nodeNum;
+			//printf("nodeNum: %u\n", nodeNum);
+		}
+		else 
+		{
+			printf("record offset: %u\n", recOffsets[i]);
+			break;
+		}
+	}
+	printf("new node to search : %u\n", *node);
+}
+
+void readNode(HFSCatalogNodeID cnid, uint *node, u_int16_t nodesize, uint offset, u_int8_t *height)
+{
+	
 	unsigned char secteur[nodesize];
 	readHDD(hdd, secteur, offset, nodesize);
-
 
 	struct BTNodeDescriptor desc;
 
 	fillNodeDescriptor(&desc, secteur, 0);
 
-	uint *recOffsets = parseRecordOffsets(desc.numRecords, secteur, nodesize);
-	printf("numRecords:%u, recOffsets[2]=%u\n", desc.numRecords, recOffsets[2]);
-	// on alloue la memoire pour nos records du node
-	
-	for(int i = 0; i < desc.numRecords; i++)
-	{
-		readIndexRecord(secteur, recOffsets[i], cnid, node);
-	}
 	*height = desc.height;
+
+	uint *recOffsets = parseRecordOffsets(desc.numRecords, secteur, nodesize);
+
+	switch(desc.kind)
+	{
+		case INDEX_NODE :
+			readIndexNode(secteur, desc.numRecords, recOffsets, node, cnid);
+			break;
+		case LEAF_NODE : 
+			readLeafNode(secteur, desc.numRecords, recOffsets, cnid);
+			break;
+		default:
+			break;
+	}
+
+	free(recOffsets);
 
 	return;
 }
@@ -211,12 +304,15 @@ void getLeafNode(HFSCatalogNodeID cnid, uint startBTree)
 	printf("height:%u, node:%u, nodesize:%u\n", header.treeDepth, header.rootNode, header.nodeSize);
 	while(height > 1)
 	{
+		printf("--------------------------------------------\n");
 		printf("height =%d\n", height);
+		printf("--------------------------------------------\n");
 		uint offset = getNodeOffsetInCat(node, nodesize, startBTree);
-		readIndexNode(cnid, &node, nodesize, offset, &height);
-		height = 1;
+		readNode(cnid, &node, nodesize, offset, &height);
+		//height = 1;
 	}
-	readLeafNode();
+	printf("-----------------------------------\n");
+	printf("offset:%u\n", getNodeOffsetInCat(node, nodesize, startBTree) );
 }
 
 
