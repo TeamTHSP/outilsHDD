@@ -12,6 +12,8 @@
 #define VOL_HEADER_START 1024
 #define NODE_DESCR_SIZE  14
 #define TAILLE_SECTEUR 512 // Ne pas mettre en constante
+#define TAILLE_BLOCK 8192 // Ne pas mettre en constante
+
 
 typedef u_int32_t HFSCatalogNodeID;
 
@@ -67,7 +69,7 @@ void readHDD(int descr, unsigned char* secteur, uint startpos, int size)
 	//affichageSecteur(secteur, size);
 }
 
-void writeHDD(int descr, char* disk, uint startpos, unsigned char* buffer, int size)
+void writeHDD(int descr, char* disk, uint startpos, int offset, unsigned char* buffer, int size)
 {
 	char continuer[11] = "poursuivre";
 	char stopper[5] = "stop";
@@ -77,7 +79,7 @@ void writeHDD(int descr, char* disk, uint startpos, unsigned char* buffer, int s
 	printf("Si vous voulez poursuivre ,ecrivez '%s':\n", continuer);
 	printf("Sinon ecrivez 'stop'\n>> " );
 	scanf("%s", reponse);
-	
+
 	while(strcmp(continuer, reponse) != 0 && strcmp(stopper, reponse) != 0)
 	{
 		printf("je n'ai pas compris votre saisie, veuillez réessayer\n");
@@ -88,13 +90,12 @@ void writeHDD(int descr, char* disk, uint startpos, unsigned char* buffer, int s
 	{
 		printf("on continue\n");
 
-		unsigned char secteur[TAILLE_SECTEUR];
-		memset(secteur, 65, sizeof(secteur));
-		readHDD(descr, secteur, startpos, TAILLE_SECTEUR);
-		memcpy(secteur, buffer, size);
-
+		unsigned char secteur[TAILLE_BLOCK];
+		readHDD(descr, secteur, startpos, TAILLE_BLOCK);
+		memcpy(&secteur[offset], buffer, size);
+		printf("secteur: %s\n", &secteur[offset]);
 		lseek(descr, startpos, SEEK_SET);
-		ssize_t bytes = write(hdd, secteur, TAILLE_SECTEUR);
+		ssize_t bytes = write(hdd, secteur, TAILLE_BLOCK);
 		if (bytes < 0 )
 			printf("Errorno write: %d  %s\n", errno, strerror(errno));
 	}
@@ -488,8 +489,11 @@ int main(int argc, char const *argv[])
 		return hdd;
 	}
 
-	unsigned char buffer[5]= {10,20,70,45,15};
-	writeHDD(hdd, disk, 0, buffer, sizeof(buffer));
+	// unsigned char buffer[4]= {0x00,0x00,0x00,0xDB};
+	// writeHDD(hdd, disk, 2416640, 1908, buffer, sizeof(buffer));
+
+	// unsigned char buffer2[4]= {0x00,0x00,0x00,0xDA};
+	// writeHDD(hdd, disk, 2416640, 2184, buffer2, sizeof(buffer2));
 
 	
 	printf("------------- Volume Header ----------------\n");
@@ -502,8 +506,12 @@ int main(int argc, char const *argv[])
 
     hfs.blockSize = getBlockSize(&hfs);
     printf("hfs.blockSize:%d\n", hfs.blockSize);
+    printf("journal info block: %u\n", htonl(hfs.journalInfoBlock));
     hfs.catalogFile.extents[0].startBlock = htonl(hfs.catalogFile.extents[0].startBlock);
-
+    printf("allocation start : %u\n",  htonl(hfs.allocationFile.extents[0].startBlock));
+    printf("extents start : %u\n",  htonl(hfs.extentsFile.extents[0].startBlock));
+    printf("attributes start : %u\n", htonl(hfs.attributesFile.extents[0].startBlock));
+    printf("startupFile start : %u\n",  htonl(hfs.startupFile.extents[0].startBlock));
     uint startBTree = hfs.blockSize * hfs.catalogFile.extents[0].startBlock;
 
     printf("startFirstBTree=%u, %d\n", startBTree, hfs.blockSize);
