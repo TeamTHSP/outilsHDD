@@ -17,8 +17,8 @@ DIFF MBR first file added "axszw"
 2: end
 3: checksum
 
---????--
-1: modif d'un node inconnu
+--CATALOG FILE BTREE HEADER RECORD--
+1: leafRecords (total number of records in leaf nodes)
 
 --FIRST LEAF NODE--
 1: numRecords
